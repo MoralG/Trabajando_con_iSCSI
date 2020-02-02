@@ -452,3 +452,220 @@ vagrant@Cliente1:~$ lsblk -l
 ## Tarea 3
 
 Crearemos un target con 2 LUN y autenticación por CHAP y la conectaremos a un cliente windows. ¿Cómo se escanea la red en windows y cómo se utilizan las unidades nuevas (formateándolas con NTFS)?
+
+
+Ahora vamos a definir los volúmenes físicos `sdc` y `sdd`, crearemos el grupo de volúmenes `vgCliente2` y por último crearemos el volumen lógico de 1GB y otro de 500MV para crear los 2 LUN.
+
+###### Definiendo el volumen físico
+~~~
+sudo pvcreate /dev/sdc /dev/sdd
+  Physical volume "/dev/sdc" successfully created.
+  Physical volume "/dev/sdd" successfully created.
+~~~
+
+###### Creando el grupo de volúmenes
+~~~
+sudo vgcreate vgCliente2 /dev/sdc /dev/sdd
+  Volume group "vgCliente2" successfully created
+~~~
+
+###### Creando los volúmenes lógico
+~~~
+sudo lvcreate -L 500M -n lv2 vgCliente2
+  Logical volume "lv2" created.
+
+sudo lvcreate -L 1G -n lv3 vgCliente2
+  Logical volume "lv3" created.
+~~~
+
+###### Comprobamos que se ha creado correctamente
+~~~
+sudo lvs
+  LV   VG         Attr       LSize   Pool Origin Data%  Meta%  Move Log Cpy%Sync Convert
+  lv1  vgCliente1 -wi-ao---- 500.00m                                                    
+  lv2  vgCliente2 -wi-a----- 500.00m                                                    
+  lv3  vgCliente2 -wi-a-----   1.00g                                                    
+
+sudo lvdisplay
+  --- Logical volume ---
+  LV Path                /dev/vgCliente2/lv2
+  LV Name                lv2
+  VG Name                vgCliente2
+  LV UUID                pIM3VO-oUwc-AOVO-uwS6-FYlW-tX5T-g7FGPa
+  LV Write Access        read/write
+  LV Creation host, time Servidor1, 2020-02-02 20:00:35 +0000
+  LV Status              available
+  # open                 0
+  LV Size                500.00 MiB
+  Current LE             125
+  Segments               1
+  Allocation             inherit
+  Read ahead sectors     auto
+  - currently set to     256
+  Block device           254:1
+   
+  --- Logical volume ---
+  LV Path                /dev/vgCliente2/lv3
+  LV Name                lv3
+  VG Name                vgCliente2
+  LV UUID                d59SdU-rhC5-D9mS-6Os4-UVwi-zThl-CwHqxZ
+  LV Write Access        read/write
+  LV Creation host, time Servidor1, 2020-02-02 20:00:49 +0000
+  LV Status              available
+  # open                 0
+  LV Size                1.00 GiB
+  Current LE             256
+  Segments               2
+  Allocation             inherit
+  Read ahead sectors     auto
+  - currently set to     256
+  Block device           254:2
+   
+  --- Logical volume ---
+  LV Path                /dev/vgCliente1/lv1
+  LV Name                lv1
+  VG Name                vgCliente1
+  LV UUID                xR20wc-5YFN-af3g-UQGD-LH6Y-MoUL-3F7H2G
+  LV Write Access        read/write
+  LV Creation host, time Servidor1, 2020-02-01 12:30:02 +0000
+  LV Status              available
+  # open                 1
+  LV Size                500.00 MiB
+  Current LE             125
+  Segments               1
+  Allocation             inherit
+  Read ahead sectors     auto
+  - currently set to     256
+  Block device           254:0
+~~~
+
+Ahora tenemmos que crear el target con usuario y contraseña en `incominguser`, que se configura el fichero `/etc/tgt/targets.conf` con la siguiente configuración:
+
+###### Creamos el target con los dos LUM
+~~~
+<target iqn.2020-01.com:tg2>
+    backing-store /dev/vgCliente2/lv2
+    backing-store /dev/vgCliente2/lv3
+    incominguser usuario1 UsuarioPassSec
+</target>
+~~~
+
+> NOTA: La contraseña debe de tener entre 12 y 16 caracteres para que no se error.
+
+Tenemos que reiniciar el servicio de `tgt` para que reconzca la modificación del fichero `/etc/tgt/targets.conf`
+
+###### Reiniciamos el servicio
+~~~
+sudo systemctl restart tgt.service 
+~~~
+
+###### Comprobamos que se ha creado correctamente
+~~~
+sudo tgtadm --mode target --op show | egrep -A 50 "iqn.2020-01.com:tg2"
+Target 2: iqn.2020-01.com:tg2
+    System information:
+        Driver: iscsi
+        State: ready
+    I_T nexus information:
+    LUN information:
+        LUN: 0
+            Type: controller
+            SCSI ID: IET     00020000
+            SCSI SN: beaf20
+            Size: 0 MB, Block size: 1
+            Online: Yes
+            Removable media: No
+            Prevent removal: No
+            Readonly: No
+            SWP: No
+            Thin-provisioning: No
+            Backing store type: null
+            Backing store path: None
+            Backing store flags: 
+        LUN: 1
+            Type: disk
+            SCSI ID: IET     00020001
+            SCSI SN: beaf21
+            Size: 524 MB, Block size: 512
+            Online: Yes
+            Removable media: No
+            Prevent removal: No
+            Readonly: No
+            SWP: No
+            Thin-provisioning: No
+            Backing store type: rdwr
+            Backing store path: /dev/vgCliente2/lv2
+            Backing store flags: 
+        LUN: 2
+            Type: disk
+            SCSI ID: IET     00020002
+            SCSI SN: beaf22
+            Size: 1074 MB, Block size: 512
+            Online: Yes
+            Removable media: No
+            Prevent removal: No
+            Readonly: No
+            SWP: No
+            Thin-provisioning: No
+            Backing store type: rdwr
+            Backing store path: /dev/vgCliente2/lv3
+            Backing store flags: 
+    Account information:
+        usuario1
+    ACL information:
+~~~
+
+Ahora vamos a iniciar el segundo target creado en una máquina Window, para realizar esto vamos abrir el **Iniciador iSCSI**.
+
+###### Abrimos el Iniciador iSCSI
+![Tarea1.1](image/Tarea1.1_iSCSI.png)
+
+En la pestaña **Detección** vamos a seleccionar en **Detectar portal..** e indicamos la dirección de nuestro servidor y el puerto. 
+
+![Tarea1.2](image/Tarea1.2_iSCSI.png)
+
+###### Detectamos el Servidor
+![Tarea1.3](image/Tarea1.3_iSCSI.png)
+
+
+Si no ha salido ningun mensaje, es que ha dectectado el Servidor y si vamos a la pestaña **Destino** nos saldrá los target disponibles.
+
+###### Vemos los target disponibles 
+![Tarea1.4](image/Tarea1.4_iSCSI.png)
+
+Nos sale que el target `iqn.2020-01.com:tg2` esta incativo, para activarlo tenemos que darle a **Conectar**.
+
+Nos saltará una ventana donde antes de darle a **Aceptar** vamos a Activar el inicio de sesión CHAP dandole a **Opciones Avanzadas...**.
+
+###### Seleccionamos opciones avazadas
+![Tarea1.5](image/Tarea1.5_iSCSI.png)
+
+Activamos el inicio de sesion CHAP y ponemos el usuario y contraseña, los mismo que asignamos en la creación del target.
+
+###### Habilitamos el inicio de CHAP y introducciomos el usuario y contraseña
+![Tarea1.6](image/Tarea1.6_iSCSI.png)
+
+Ahora al darle a **Aceptar** nos saldrá en estado **Conectado**.
+
+###### Comprobamos que esta conectado
+![Tarea1.7](image/Tarea1.7_iSCSI.png)
+
+Ahora ya tenemos los discos asignado y disponibles para inicializarlos y formatearlos a NTFS. Para hacer esto vamos a abrir **Administración de discos**
+
+###### Abrimos el administración de discos
+![Tarea1.8](image/Tarea1.8_iSCSI.png)
+
+###### Inicializamos los discos
+![Tarea1.9](image/Tarea1.9_iSCSI.png)
+
+###### Formateamos los discos a NTFS
+![Tarea1.10](image/Tarea10_iSCSI.png)
+![Tarea1.11](image/Tarea1.11_iSCSI.png)
+
+Comprobamos que nos salen montados y podemos utilizarlos de manera normal.
+
+###### Comprobamos que aparecen montados
+![Tarea1.12](image/Tarea1.12_iSCSI.png)
+
+###### Creamos un fichero
+![Tarea1.13](image/Tarea1.13_iSCSI.png)
